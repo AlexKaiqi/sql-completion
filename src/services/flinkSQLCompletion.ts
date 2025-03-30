@@ -4,13 +4,10 @@ import { SQLParserService } from './sqlParser';
 export class FlinkSQLCompletionService {
     private parser: SQLParserService;
     private context: FlinkSQLContext;
-    private astCache: Map<string, { ast: any; timestamp: number }>;
-    private readonly CACHE_TTL = 5000; // 缓存有效期 5 秒
 
     constructor(context: FlinkSQLContext) {
         this.parser = new SQLParserService();
         this.context = context;
-        this.astCache = new Map();
     }
 
     /**
@@ -27,27 +24,6 @@ export class FlinkSQLCompletionService {
             items,
             context
         };
-    }
-
-    /**
-     * 获取缓存的 AST
-     */
-    private getCachedAST(sql: string): any | null {
-        const cached = this.astCache.get(sql);
-        if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-            return cached.ast;
-        }
-        return null;
-    }
-
-    /**
-     * 设置 AST 缓存
-     */
-    private setCachedAST(sql: string, ast: any): void {
-        this.astCache.set(sql, {
-            ast,
-            timestamp: Date.now()
-        });
     }
 
     /**
@@ -90,7 +66,7 @@ export class FlinkSQLCompletionService {
 
         // 根据上下文智能返回补全项
         if (this.isInKeywordContext(textBeforeCursor)) {
-            items.push(...this.getKeywordCompletions(text, position));
+            items.push(...this.getKeywordCompletions());
         }
         
         if (this.isInFunctionContext(textBeforeCursor)) {
@@ -108,7 +84,7 @@ export class FlinkSQLCompletionService {
         // 如果没有特定上下文，返回所有补全项
         if (items.length === 0) {
             items.push(
-                ...this.getKeywordCompletions(text, position),
+                ...this.getKeywordCompletions(),
                 ...this.getFunctionCompletions(),
                 ...this.getTableCompletions(),
                 ...this.getColumnCompletions(text, position)
@@ -139,6 +115,8 @@ export class FlinkSQLCompletionService {
      * 判断是否在函数上下文中
      */
     private isInFunctionContext(text: string): boolean {
+        // 判断是否在函数调用位置
+        // 通过检查括号匹配
         return text.includes('(') && !text.includes(')');
     }
 
@@ -155,13 +133,15 @@ export class FlinkSQLCompletionService {
      * 判断是否在列名上下文中
      */
     private isInColumnContext(text: string): boolean {
+        // 判断是否在列名位置
+        // 在 SELECT 之后，FROM 之前
         return text.includes('SELECT') && !text.includes('FROM');
     }
 
     /**
      * 获取关键字补全
      */
-    private getKeywordCompletions(sql: string, position: number): CompletionItem[] {
+    private getKeywordCompletions(): CompletionItem[] {
         const keywords = [
             // 基础 SQL 关键字
             'SELECT', 'FROM', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT',
@@ -242,6 +222,7 @@ export class FlinkSQLCompletionService {
      * 获取表名补全
      */
     private getTableCompletions(): CompletionItem[] {
+        // 从上下文中获取可用表名
         return this.context.tables.map(table => ({
             label: table,
             kind: 'table',
@@ -253,22 +234,16 @@ export class FlinkSQLCompletionService {
      * 获取列名补全
      */
     private getColumnCompletions(sql: string, position: number): CompletionItem[] {
+        // 智能提供相关表的列名
+        // 通过解析 SQL 获取相关表
+        // 从上下文中获取这些表的列名
         const items: CompletionItem[] = [];
         
-        // 尝试从缓存获取 AST
-        let ast = this.getCachedAST(sql);
-        if (!ast) {
-            // 解析当前 SQL 语句
-            const parseResult = this.parser.parse(sql);
-            if (parseResult.success && parseResult.ast) {
-                ast = parseResult.ast;
-                this.setCachedAST(sql, ast);
-            }
-        }
-
-        if (ast) {
+        // 解析当前 SQL 语句
+        const parseResult = this.parser.parse(sql);
+        if (parseResult.success && parseResult.ast) {
             // 从 AST 中提取表名
-            const tables = this.extractTablesFromAST(ast);
+            const tables = this.extractTablesFromAST(parseResult.ast);
             
             // 只返回相关表的列名
             tables.forEach(table => {
