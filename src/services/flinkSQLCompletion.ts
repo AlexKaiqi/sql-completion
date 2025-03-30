@@ -1,6 +1,25 @@
 import { CompletionItem, CompletionContext, CompletionResult, FlinkSQLContext } from '../types/sql';
 import { SQLParserService } from './sqlParser';
 
+enum CompletionContextType {
+    NONE,
+    SELECT,
+    FROM,
+    WHERE,
+    GROUP_BY,
+    HAVING,
+    ORDER_BY,
+    FUNCTION,
+    TABLE,
+    COLUMN,
+    JOIN,
+    ON,
+    AND,
+    OR,
+    COMPARISON,
+    // ... 其他类型
+}
+
 export class FlinkSQLCompletionService {
     private parser: SQLParserService;
     private context: FlinkSQLContext;
@@ -30,27 +49,104 @@ export class FlinkSQLCompletionService {
      * 获取补全上下文
      */
     private getCompletionContext(sql: string, position: number): CompletionContext {
+        const parseResult = this.parser.parse(sql);
+        if (parseResult.success && parseResult.ast) {
+            // 使用 AST 来确定当前位置的上下文
+            const node = this.findNodeAtPosition(parseResult.ast, position);
+            const { line, column } = this.calculateLineAndColumn(sql, position);
+            return {
+                position,
+                text: sql,
+                line,
+                column,
+                node
+            };
+        }
+        // 降级处理：使用当前的简单逻辑
+        return this.getSimpleCompletionContext(sql, position);
+    }
+
+    /**
+     * 计算指定位置的行号和列号
+     */
+    private calculateLineAndColumn(sql: string, position: number): { line: number; column: number } {
         const lines = sql.split('\n');
-        let currentLine = 0;
-        let currentColumn = 0;
         let currentPosition = 0;
+        let line = 1;
+        let column = 1;
 
         for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            if (currentPosition + line.length >= position) {
-                currentLine = i;
-                currentColumn = position - currentPosition;
+            const lineLength = lines[i].length + 1; // +1 for newline
+            if (currentPosition + lineLength > position) {
+                line = i + 1;
+                column = position - currentPosition + 1;
                 break;
             }
-            currentPosition += line.length;
+            currentPosition += lineLength;
         }
 
+        return { line, column };
+    }
+
+    /**
+     * 获取简单的补全上下文（降级处理）
+     */
+    private getSimpleCompletionContext(sql: string, position: number): CompletionContext {
+        const { line, column } = this.calculateLineAndColumn(sql, position);
         return {
             position,
             text: sql,
-            line: currentLine,
-            column: currentColumn
+            line,
+            column
         };
+    }
+
+    /**
+     * 在 AST 中查找指定位置的节点
+     * @param ast AST 根节点
+     * @param position 目标位置
+     * @returns 找到的节点或 null
+     */
+    private findNodeAtPosition(ast: any, position: number): any {
+        if (!ast || typeof ast !== 'object') {
+            return null;
+        }
+
+        // 如果节点有位置信息，检查是否包含目标位置
+        if (ast.start && ast.end) {
+            if (position >= ast.start && position <= ast.end) {
+                // 遍历子节点，找到最具体的节点
+                for (const key in ast) {
+                    if (key === 'start' || key === 'end' || key === 'type') {
+                        continue;
+                    }
+                    const child = ast[key];
+                    if (child && typeof child === 'object') {
+                        const found = this.findNodeAtPosition(child, position);
+                        if (found) {
+                            return found;
+                        }
+                    }
+                }
+                return ast;
+            }
+        }
+
+        // 如果没有位置信息，递归检查所有子节点
+        for (const key in ast) {
+            if (key === 'start' || key === 'end' || key === 'type') {
+                continue;
+            }
+            const child = ast[key];
+            if (child && typeof child === 'object') {
+                const found = this.findNodeAtPosition(child, position);
+                if (found) {
+                    return found;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -77,7 +173,7 @@ export class FlinkSQLCompletionService {
             items.push(...this.getTableCompletions());
         }
         
-        if (this.isInColumnContext(textBeforeCursor)) {
+        if (this.isInColumnContext(context)) {
             items.push(...this.getColumnCompletions(text, position));
         }
 
@@ -132,10 +228,40 @@ export class FlinkSQLCompletionService {
     /**
      * 判断是否在列名上下文中
      */
-    private isInColumnContext(text: string): boolean {
-        // 判断是否在列名位置
-        // 在 SELECT 之后，FROM 之前
-        return text.includes('SELECT') && !text.includes('FROM');
+    private isInColumnContext(context: CompletionContext): boolean {
+        const { node, text } = context;
+        if (!node) return false;
+        
+        // 检查是否在 SELECT 子句中
+        if (node.type === 'SELECT') {
+            // 检查是否在列列表中
+            return this.isInColumnList(node, context.position);
+        }
+        
+        // 检查是否在子查询中
+        if (node.type === 'SUBQUERY') {
+            return this.isInColumnContext({
+                ...context,
+                node: node.select
+            });
+        }
+        
+        return false;
+    }
+
+    /**
+     * 检查是否在列列表中
+     */
+    private isInColumnList(node: any, position: number): boolean {
+        if (!node || !node.columns) return false;
+
+        // 检查位置是否在列列表的范围内
+        if (node.columns.start && node.columns.end) {
+            return position >= node.columns.start && position <= node.columns.end;
+        }
+
+        // 如果没有位置信息，检查是否在 SELECT 语句中
+        return node.type === 'SELECT' && !node.from;
     }
 
     /**
@@ -308,5 +434,36 @@ export class FlinkSQLCompletionService {
         }
 
         return tables;
+    }
+
+    private determineContextFromNode(node: any): CompletionContextType {
+        if (!node) return CompletionContextType.NONE;
+        
+        switch (node.type) {
+            case 'SELECT':
+                return CompletionContextType.SELECT;
+            case 'FROM':
+                return CompletionContextType.FROM;
+            case 'WHERE':
+                return CompletionContextType.WHERE;
+            case 'FUNCTION_CALL':
+                return CompletionContextType.FUNCTION;
+            case 'TABLE':
+                return CompletionContextType.TABLE;
+            case 'COLUMN':
+                return CompletionContextType.COLUMN;
+            case 'JOIN':
+                return CompletionContextType.JOIN;
+            case 'ON':
+                return CompletionContextType.ON;
+            case 'AND':
+                return CompletionContextType.AND;
+            case 'OR':
+                return CompletionContextType.OR;
+            case 'COMPARISON':
+                return CompletionContextType.COMPARISON;
+            default:
+                return CompletionContextType.NONE;
+        }
     }
 } 

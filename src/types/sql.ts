@@ -22,6 +22,7 @@ export interface CompletionContext {
     text: string;
     line: number;
     column: number;
+    node?: any; // AST 节点
 }
 
 export interface CompletionResult {
