@@ -1,5 +1,10 @@
 import { Parser } from 'node-sql-parser';
-import { SQLParserResult } from '../types/sql';
+
+export interface SQLParserResult {
+    success: boolean;
+    ast?: any;
+    error?: string;
+}
 
 export class SQLParserService {
     private parser: Parser;
