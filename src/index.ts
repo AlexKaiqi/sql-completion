@@ -62,7 +62,7 @@ console.log('补全建议:', complexResult.items.map(item => `${item.label} (${i
 
 // 测试场景 6: 在 select 后的字段补全
 console.log('\n测试场景 6: 在 select 后的字段补全');
-const selectFromResult = completionService.getCompletionItems('select  from user1', 7);
+const selectFromResult = completionService.getCompletionItems('select  from user', 7);
 console.log('补全建议:', JSON.stringify(selectFromResult.items, null, 2));
 
 // 如果将来有其他相关的类或函数，也可以在这里统一导出
