@@ -45,6 +45,7 @@ console.log('\n测试场景 3: FROM 子句中的表名补全');
 const fromResult = completionService.getCompletionItems('SELECT * FROM ', 15);
 console.log('补全建议:', fromResult.items.map(item => `${item.label} (${item.kind})`));
 
+
 // 测试场景 4: WHERE 子句中的列名补全
 console.log('\n测试场景 4: WHERE 子句中的列名补全');
 const whereResult = completionService.getCompletionItems('SELECT * FROM users WHERE ', 25);
@@ -58,6 +59,11 @@ LEFT JOIN orders o ON u.id = o.user_id
 GROUP BY `;
 const complexResult = completionService.getCompletionItems(complexSQL, complexSQL.length);
 console.log('补全建议:', complexResult.items.map(item => `${item.label} (${item.kind})`));
+
+// 测试场景 6: 在 select 后的字段补全
+console.log('\n测试场景 6: 在 select 后的字段补全');
+const selectFromResult = completionService.getCompletionItems('select  from user1', 7);
+console.log('补全建议:', JSON.stringify(selectFromResult.items, null, 2));
 
 // 如果将来有其他相关的类或函数，也可以在这里统一导出
 // export { OtherClass } from './otherFile'; 

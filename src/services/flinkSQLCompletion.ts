@@ -17,6 +17,31 @@ export class FlinkSQLCompletionService {
      * @returns 补全建议列表
      */
     public getCompletionItems(sql: string, position: number): CompletionResult {
+        // 检查是否在 SELECT 和 FROM 之间
+        const lowerSql = sql.toLowerCase();
+        if (lowerSql.includes('select') && lowerSql.includes('from')) {
+            const fromMatch = lowerSql.match(/from\s+(\w+)/i);
+            if (fromMatch && position > lowerSql.indexOf('select') && position < lowerSql.indexOf('from')) {
+                const tableName = fromMatch[1];
+                const columns = this.context.columns[tableName] || [];
+                return {
+                    items: columns.map(column => ({
+                        label: column,
+                        kind: 'column',
+                        detail: `${tableName} 表的字段`
+                    })),
+                    context: {
+                        position,
+                        text: sql,
+                        line: 1,
+                        column: position,
+                        contextType: CompletionContextType.SELECT,
+                        ast: null
+                    }
+                };
+            }
+        }
+
         const parseResult = this.parser.parse(sql, position);
         const { line, column } = this.calculateLineAndColumn(sql, position);
         const contextType = this.determineContextFromAST(parseResult.ast, position);

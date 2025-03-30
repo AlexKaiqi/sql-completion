@@ -7,7 +7,8 @@ export const testContext: FlinkSQLContext = {
         'products',
         'categories',
         'order_items',
-        'shipping_addresses'
+        'shipping_addresses',
+        'user1'
     ],
     columns: {
         'users': ['id', 'name', 'email', 'created_at', 'updated_at'],
@@ -15,7 +16,8 @@ export const testContext: FlinkSQLContext = {
         'products': ['id', 'name', 'description', 'price', 'stock', 'category_id'],
         'categories': ['id', 'name', 'description', 'parent_id'],
         'order_items': ['id', 'order_id', 'product_id', 'quantity', 'unit_price'],
-        'shipping_addresses': ['id', 'user_id', 'address', 'city', 'state', 'zip_code']
+        'shipping_addresses': ['id', 'user_id', 'address', 'city', 'state', 'zip_code'],
+        'user1': ['id', 'name', 'sex', 'age']
     },
     functions: [
         'COUNT',
