@@ -4,6 +4,24 @@ export interface SQLParserResult {
     error?: string;
 }
 
+export enum CompletionContextType {
+    NONE,
+    SELECT,
+    FROM,
+    WHERE,
+    GROUP_BY,
+    HAVING,
+    ORDER_BY,
+    TABLE,
+    COLUMN,
+    FUNCTION,
+    JOIN,
+    ON,
+    AND,
+    OR,
+    COMPARISON
+}
+
 export interface SQLConfig {
     dialect: 'mysql' | 'postgresql' | 'flinksql' | 'hivesql' | 'sparksql' | 'trinosql' | 'impalasql';
     version?: string;
@@ -15,6 +33,7 @@ export interface CompletionItem {
     label: string;
     kind: string;
     detail?: string;
+    sortText?: string;  // 用于控制补全项的排序
 }
 
 export interface CompletionContext {
@@ -22,7 +41,8 @@ export interface CompletionContext {
     text: string;
     line: number;
     column: number;
-    node?: any; // AST 节点
+    contextType: CompletionContextType;
+    ast?: any;
 }
 
 export interface CompletionResult {

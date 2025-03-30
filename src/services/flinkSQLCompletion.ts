@@ -1,24 +1,5 @@
-import { CompletionItem, CompletionContext, CompletionResult, FlinkSQLContext } from '../types/sql';
+import { CompletionItem, CompletionContext, CompletionResult, FlinkSQLContext, CompletionContextType } from '../types/sql';
 import { SQLParserService } from './sqlParser';
-
-enum CompletionContextType {
-    NONE,
-    SELECT,
-    FROM,
-    WHERE,
-    GROUP_BY,
-    HAVING,
-    ORDER_BY,
-    FUNCTION,
-    TABLE,
-    COLUMN,
-    JOIN,
-    ON,
-    AND,
-    OR,
-    COMPARISON,
-    // ... 其他类型
-}
 
 export class FlinkSQLCompletionService {
     private parser: SQLParserService;
@@ -36,13 +17,129 @@ export class FlinkSQLCompletionService {
      * @returns 补全建议列表
      */
     public getCompletionItems(sql: string, position: number): CompletionResult {
-        const context = this.getCompletionContext(sql, position);
-        const items = this.getCompletionItemsByContext(context);
-        
+        const parseResult = this.parser.parse(sql, position);
+        const { line, column } = this.calculateLineAndColumn(sql, position);
+        const contextType = this.determineContextFromAST(parseResult.ast, position);
+
+        // 获取基于语法规则的补全建议
+        const items = this.getCompletionItemsByRules(parseResult.suggestions?.rules || [], sql, position);
+
+        // 获取基于关键字的补全建议
+        if (parseResult.suggestions?.keywords) {
+            items.push(...this.getKeywordCompletionItems(parseResult.suggestions.keywords));
+        }
+
+        // 根据上下文对补全项进行排序和过滤
+        const sortedItems = this.sortCompletionItems(items, contextType);
+
         return {
-            items,
-            context
+            items: sortedItems,
+            context: {
+                position,
+                text: sql,
+                line,
+                column,
+                contextType,
+                ast: parseResult.ast
+            }
         };
+    }
+
+    /**
+     * 根据语法规则获取补全建议
+     */
+    private getCompletionItemsByRules(rules: string[], sql: string, position: number): CompletionItem[] {
+        const items: CompletionItem[] = [];
+
+        for (const rule of rules) {
+            switch (rule) {
+                case 'table':
+                    items.push(...this.getTableCompletions());
+                    break;
+                case 'column':
+                    items.push(...this.getColumnCompletions(sql, position));
+                    break;
+                case 'function':
+                    items.push(...this.getFunctionCompletions());
+                    break;
+                case 'expression':
+                    items.push(
+                        ...this.getColumnCompletions(sql, position),
+                        ...this.getFunctionCompletions(),
+                        ...this.getOperatorCompletions()
+                    );
+                    break;
+            }
+        }
+
+        return items;
+    }
+
+    /**
+     * 获取关键字补全建议
+     */
+    private getKeywordCompletionItems(keywords: string[]): CompletionItem[] {
+        return keywords.map(keyword => ({
+            label: keyword,
+            kind: 'keyword',
+            detail: 'FlinkSQL 关键字'
+        }));
+    }
+
+    /**
+     * 对补全项进行排序
+     */
+    private sortCompletionItems(items: CompletionItem[], contextType: CompletionContextType): CompletionItem[] {
+        // 根据上下文类型设置排序权重
+        const getWeight = (item: CompletionItem): number => {
+            switch (contextType) {
+                case CompletionContextType.SELECT:
+                    if (item.kind === 'column' && this.isCommonColumn(item.label)) return 100;
+                    if (item.kind === 'function') return 90;
+                    if (item.kind === 'column') return 80;
+                    break;
+                case CompletionContextType.WHERE:
+                    if (item.kind === 'column' && this.isFilterableColumn(item.label)) return 100;
+                    if (item.kind === 'operator') return 90;
+                    if (item.kind === 'column') return 80;
+                    if (item.kind === 'function') return 70;
+                    break;
+                case CompletionContextType.FROM:
+                    if (item.kind === 'table') return 100;
+                    if (item.kind === 'keyword' && item.label.includes('JOIN')) return 90;
+                    break;
+                case CompletionContextType.JOIN:
+                    if (item.kind === 'table') return 100;
+                    break;
+                case CompletionContextType.GROUP_BY:
+                case CompletionContextType.ORDER_BY:
+                    if (item.kind === 'column') return 100;
+                    if (item.kind === 'function') return 90;
+                    break;
+                case CompletionContextType.HAVING:
+                    if (item.kind === 'function') return 100;
+                    if (item.kind === 'column') return 90;
+                    if (item.kind === 'operator') return 80;
+                    break;
+            }
+            return 0;
+        };
+
+        // 为每个补全项添加权重并排序
+        return items
+            .map(item => ({
+                ...item,
+                weight: getWeight(item)
+            }))
+            .sort((a, b) => {
+                // 首先按权重排序
+                if (b.weight !== a.weight) {
+                    return b.weight - a.weight;
+                }
+                // 权重相同时按标签字母顺序排序
+                return a.label.localeCompare(b.label);
+            })
+            .map(({ weight, ...item }) => item);  // 移除权重属性
     }
 
     /**
@@ -50,20 +147,30 @@ export class FlinkSQLCompletionService {
      */
     private getCompletionContext(sql: string, position: number): CompletionContext {
         const parseResult = this.parser.parse(sql);
-        if (parseResult.success && parseResult.ast) {
-            // 使用 AST 来确定当前位置的上下文
-            const node = this.findNodeAtPosition(parseResult.ast, position);
-            const { line, column } = this.calculateLineAndColumn(sql, position);
+        const { line, column } = this.calculateLineAndColumn(sql, position);
+
+        // 使用 AST 来确定当前位置的上下文
+        if (parseResult.ast) {
+            const contextType = this.determineContextFromAST(parseResult.ast, position);
             return {
                 position,
                 text: sql,
                 line,
                 column,
-                node
+                contextType,
+                ast: parseResult.ast
             };
         }
+
         // 降级处理：使用当前的简单逻辑
-        return this.getSimpleCompletionContext(sql, position);
+        return {
+            position,
+            text: sql,
+            line,
+            column,
+            contextType: CompletionContextType.NONE,
+            ast: null
+        };
     }
 
     /**
@@ -97,7 +204,9 @@ export class FlinkSQLCompletionService {
             position,
             text: sql,
             line,
-            column
+            column,
+            contextType: CompletionContextType.NONE,
+            ast: null
         };
     }
 
@@ -150,40 +259,111 @@ export class FlinkSQLCompletionService {
     }
 
     /**
+     * 判断是否在 SELECT 上下文中
+     */
+    private isInSelectContext(context: CompletionContext): boolean {
+        const { text, position, ast } = context;
+        if (!ast) return false;
+
+        // 检查是否在 selectList 中
+        if (ast.locations) {
+            return ast.locations.some((loc: any) => 
+                loc.type === 'selectList' && 
+                this.isPositionInLocation(position, loc.location)
+            );
+        }
+
+        // 降级处理：使用文本分析
+        const textBeforeCursor = text.substring(0, position).toLowerCase();
+        return textBeforeCursor.includes('select') && !textBeforeCursor.includes('from');
+    }
+
+    /**
+     * 判断是否在 FROM 上下文中
+     */
+    private isInFromContext(context: CompletionContext): boolean {
+        const { text, position, ast } = context;
+        if (!ast) return false;
+
+        // 检查是否在 FROM 子句中
+        if (ast.locations) {
+            return ast.locations.some((loc: any) => 
+                loc.type === 'fromClause' && 
+                this.isPositionInLocation(position, loc.location)
+            );
+        }
+
+        // 降级处理：使用文本分析
+        const textBeforeCursor = text.substring(0, position).toLowerCase();
+        return textBeforeCursor.includes('from') && !textBeforeCursor.includes('where');
+    }
+
+    /**
+     * 判断是否在 WHERE 上下文中
+     */
+    private isInWhereContext(context: CompletionContext): boolean {
+        const { text, position, ast } = context;
+        if (!ast) return false;
+
+        // 检查是否在 WHERE 子句中
+        if (ast.locations) {
+            return ast.locations.some((loc: any) => 
+                loc.type === 'whereClause' && 
+                this.isPositionInLocation(position, loc.location)
+            );
+        }
+
+        // 降级处理：使用文本分析
+        const textBeforeCursor = text.substring(0, position).toLowerCase();
+        return textBeforeCursor.includes('where');
+    }
+
+    /**
+     * 判断位置是否在指定的位置范围内
+     */
+    private isPositionInLocation(position: number, location: any): boolean {
+        const { line, column } = this.calculateLineAndColumn(location.text || '', position);
+        return line >= location.first_line && 
+               line <= location.last_line &&
+               (line > location.first_line || column >= location.first_column) &&
+               (line < location.last_line || column <= location.last_column);
+    }
+
+    /**
      * 根据上下文获取补全建议
      */
     private getCompletionItemsByContext(context: CompletionContext): CompletionItem[] {
         const items: CompletionItem[] = [];
-        const { text, position } = context;
 
-        // 获取当前位置之前的文本
-        const textBeforeCursor = text.substring(0, position);
-        const lastWord = this.getLastWord(textBeforeCursor);
-
-        // 根据上下文智能返回补全项
-        if (this.isInKeywordContext(textBeforeCursor)) {
-            items.push(...this.getKeywordCompletions());
-        }
-        
-        if (this.isInFunctionContext(textBeforeCursor)) {
+        // 根据上下文类型返回对应的补全项
+        if (this.isInSelectContext(context)) {
+            // 在 SELECT 上下文中，提供列名和函数
+            items.push(...this.getColumnCompletions(context.text, context.position));
             items.push(...this.getFunctionCompletions());
-        }
-        
-        if (this.isInTableContext(textBeforeCursor)) {
+        } else if (this.isInFromContext(context)) {
+            // 在 FROM 上下文中，只提供表名
             items.push(...this.getTableCompletions());
-        }
-        
-        if (this.isInColumnContext(context)) {
-            items.push(...this.getColumnCompletions(text, position));
-        }
-
-        // 如果没有特定上下文，返回所有补全项
-        if (items.length === 0) {
+        } else if (this.isInWhereContext(context)) {
+            // 在 WHERE 上下文中，提供列名、函数和操作符
+            items.push(...this.getColumnCompletions(context.text, context.position));
+            items.push(...this.getFunctionCompletions());
+            items.push(...this.getOperatorCompletions());
+        } else if (this.isInKeywordContext(context.text)) {
+            // 在关键字上下文中，只提供关键字
+            items.push(...this.getKeywordCompletions());
+        } else if (this.isInFunctionContext(context.text)) {
+            // 在函数上下文中，只提供函数
+            items.push(...this.getFunctionCompletions());
+        } else if (this.isInTableContext(context.text)) {
+            // 在表名上下文中，只提供表名
+            items.push(...this.getTableCompletions());
+        } else {
+            // 如果没有特定上下文，返回所有补全项
             items.push(
                 ...this.getKeywordCompletions(),
                 ...this.getFunctionCompletions(),
                 ...this.getTableCompletions(),
-                ...this.getColumnCompletions(text, position)
+                ...this.getColumnCompletions(context.text, context.position)
             );
         }
 
@@ -213,7 +393,9 @@ export class FlinkSQLCompletionService {
     private isInFunctionContext(text: string): boolean {
         // 判断是否在函数调用位置
         // 通过检查括号匹配
-        return text.includes('(') && !text.includes(')');
+        const openBrackets = (text.match(/\(/g) || []).length;
+        const closeBrackets = (text.match(/\)/g) || []).length;
+        return openBrackets > closeBrackets;
     }
 
     /**
@@ -229,20 +411,20 @@ export class FlinkSQLCompletionService {
      * 判断是否在列名上下文中
      */
     private isInColumnContext(context: CompletionContext): boolean {
-        const { node, text } = context;
-        if (!node) return false;
+        const { text, position, ast } = context;
+        if (!ast) return false;
         
         // 检查是否在 SELECT 子句中
-        if (node.type === 'SELECT') {
+        if (ast.type === 'SELECT') {
             // 检查是否在列列表中
-            return this.isInColumnList(node, context.position);
+            return this.isInColumnList(ast, position);
         }
         
         // 检查是否在子查询中
-        if (node.type === 'SUBQUERY') {
+        if (ast.type === 'SUBQUERY') {
             return this.isInColumnContext({
                 ...context,
-                node: node.select
+                ast: ast.select
             });
         }
         
@@ -360,9 +542,6 @@ export class FlinkSQLCompletionService {
      * 获取列名补全
      */
     private getColumnCompletions(sql: string, position: number): CompletionItem[] {
-        // 智能提供相关表的列名
-        // 通过解析 SQL 获取相关表
-        // 从上下文中获取这些表的列名
         const items: CompletionItem[] = [];
         
         // 解析当前 SQL 语句
@@ -371,15 +550,39 @@ export class FlinkSQLCompletionService {
             // 从 AST 中提取表名
             const tables = this.extractTablesFromAST(parseResult.ast);
             
-            // 只返回相关表的列名
+            // 获取当前上下文
+            const context = this.determineContextFromAST(parseResult.ast, position);
+            
+            // 根据上下文过滤列名
             tables.forEach(table => {
                 if (this.context.columns[table]) {
                     this.context.columns[table].forEach(column => {
-                        items.push({
-                            label: column,
-                            kind: 'column',
-                            detail: `表 ${table} 的列`
-                        });
+                        // 在 WHERE 子句中，优先显示可用于过滤的列
+                        if (context === CompletionContextType.WHERE) {
+                            items.push({
+                                label: column,
+                                kind: 'column',
+                                detail: `表 ${table} 的列`,
+                                sortText: this.isFilterableColumn(column) ? '0' + column : '1' + column
+                            });
+                        }
+                        // 在 SELECT 子句中，优先显示常用列
+                        else if (context === CompletionContextType.SELECT) {
+                            items.push({
+                                label: column,
+                                kind: 'column',
+                                detail: `表 ${table} 的列`,
+                                sortText: this.isCommonColumn(column) ? '0' + column : '1' + column
+                            });
+                        }
+                        // 其他情况正常显示
+                        else {
+                            items.push({
+                                label: column,
+                                kind: 'column',
+                                detail: `表 ${table} 的列`
+                            });
+                        }
                     });
                 }
             });
@@ -403,67 +606,172 @@ export class FlinkSQLCompletionService {
      * 从 AST 中提取表名
      */
     private extractTablesFromAST(ast: any): string[] {
-        const tables: string[] = [];
+        const tables = new Set<string>();
         
-        if (!ast) return tables;
+        if (!ast || !ast.locations) return Array.from(tables);
 
-        // 处理 FROM 子句中的表
-        if (ast.from) {
-            if (Array.isArray(ast.from)) {
-                ast.from.forEach((from: any) => {
-                    if (from.table) {
-                        tables.push(from.table);
-                    }
-                });
-            } else if (ast.from.table) {
-                tables.push(ast.from.table);
+        // 从 locations 中提取表名
+        ast.locations.forEach((loc: any) => {
+            if (loc.type === 'table' && loc.identifierChain) {
+                const tableName = loc.identifierChain.map((id: any) => id.name).join('.');
+                tables.add(tableName);
             }
-        }
+        });
 
-        // 处理 JOIN 子句中的表
-        if (ast.join) {
-            if (Array.isArray(ast.join)) {
-                ast.join.forEach((join: any) => {
-                    if (join.table) {
-                        tables.push(join.table);
-                    }
-                });
-            } else if (ast.join.table) {
-                tables.push(ast.join.table);
-            }
-        }
-
-        return tables;
+        return Array.from(tables);
     }
 
-    private determineContextFromNode(node: any): CompletionContextType {
-        if (!node) return CompletionContextType.NONE;
-        
-        switch (node.type) {
-            case 'SELECT':
+    /**
+     * 从 AST 中确定上下文类型
+     */
+    private determineContextFromAST(ast: any, position: number): CompletionContextType {
+        if (!ast.locations) {
+            return CompletionContextType.NONE;
+        }
+
+        // 遍历所有位置信息，找到最具体的上下文
+        let mostSpecificContext = CompletionContextType.NONE;
+        let mostSpecificDepth = -1;
+
+        for (const loc of ast.locations) {
+            const { first_line, last_line, first_column, last_column } = loc.location;
+            const { line, column } = this.calculateLineAndColumn(ast.text || '', position);
+
+            // 检查位置是否在当前节点范围内
+            if (line >= first_line && line <= last_line &&
+                (line > first_line || column >= first_column) &&
+                (line < last_line || column <= last_column)) {
+                
+                // 计算当前节点的深度
+                const depth = this.calculateNodeDepth(loc);
+                
+                // 如果当前节点更具体（深度更大），更新上下文
+                if (depth > mostSpecificDepth) {
+                    mostSpecificDepth = depth;
+                    mostSpecificContext = this.getContextTypeFromLocation(loc);
+                }
+            }
+        }
+
+        return mostSpecificContext;
+    }
+
+    /**
+     * 计算节点深度
+     */
+    private calculateNodeDepth(node: any): number {
+        let depth = 0;
+        let current = node;
+
+        while (current.parent) {
+            depth++;
+            current = current.parent;
+        }
+
+        return depth;
+    }
+
+    /**
+     * 从位置信息获取上下文类型
+     */
+    private getContextTypeFromLocation(loc: any): CompletionContextType {
+        switch (loc.type) {
+            case 'statement':
+                return CompletionContextType.NONE;
+            case 'selectList':
                 return CompletionContextType.SELECT;
-            case 'FROM':
-                return CompletionContextType.FROM;
-            case 'WHERE':
-                return CompletionContextType.WHERE;
-            case 'FUNCTION_CALL':
-                return CompletionContextType.FUNCTION;
-            case 'TABLE':
+            case 'table':
                 return CompletionContextType.TABLE;
-            case 'COLUMN':
+            case 'column':
                 return CompletionContextType.COLUMN;
-            case 'JOIN':
+            case 'whereClause':
+                return CompletionContextType.WHERE;
+            case 'groupByClause':
+                return CompletionContextType.GROUP_BY;
+            case 'havingClause':
+                return CompletionContextType.HAVING;
+            case 'orderByClause':
+                return CompletionContextType.ORDER_BY;
+            case 'function':
+                return CompletionContextType.FUNCTION;
+            case 'joinClause':
                 return CompletionContextType.JOIN;
-            case 'ON':
+            case 'onClause':
                 return CompletionContextType.ON;
-            case 'AND':
-                return CompletionContextType.AND;
-            case 'OR':
-                return CompletionContextType.OR;
-            case 'COMPARISON':
-                return CompletionContextType.COMPARISON;
+            case 'expression':
+                return this.getExpressionContextType(loc);
             default:
                 return CompletionContextType.NONE;
         }
+    }
+
+    /**
+     * 获取表达式的上下文类型
+     */
+    private getExpressionContextType(loc: any): CompletionContextType {
+        if (!loc.parent) return CompletionContextType.NONE;
+
+        switch (loc.parent.type) {
+            case 'whereClause':
+                return CompletionContextType.WHERE;
+            case 'havingClause':
+                return CompletionContextType.HAVING;
+            case 'onClause':
+                return CompletionContextType.ON;
+            case 'selectList':
+                return CompletionContextType.SELECT;
+            default:
+                return CompletionContextType.NONE;
+        }
+    }
+
+    /**
+     * 判断是否为可过滤的列
+     */
+    private isFilterableColumn(column: string): boolean {
+        const filterablePatterns = [
+            /id$/i,
+            /status$/i,
+            /type$/i,
+            /category$/i,
+            /date$/i,
+            /time$/i,
+            /code$/i,
+            /name$/i
+        ];
+        return filterablePatterns.some(pattern => pattern.test(column));
+    }
+
+    /**
+     * 判断是否为常用列
+     */
+    private isCommonColumn(column: string): boolean {
+        const commonPatterns = [
+            /^id$/i,
+            /name$/i,
+            /title$/i,
+            /description$/i,
+            /status$/i,
+            /created/i,
+            /updated/i
+        ];
+        return commonPatterns.some(pattern => pattern.test(column));
+    }
+
+    /**
+     * 获取操作符补全
+     */
+    private getOperatorCompletions(): CompletionItem[] {
+        const operators = [
+            '=', '>', '<', '>=', '<=', '<>', '!=',
+            'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN',
+            'IS NULL', 'IS NOT NULL'
+        ];
+
+        return operators.map(op => ({
+            label: op,
+            kind: 'operator',
+            detail: 'SQL 操作符'
+        }));
     }
 } 

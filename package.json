@@ -4,18 +4,14 @@
   "description": "FlinkSQL 补全功能实现",
   "main": "index.js",
   "scripts": {
-    "start": "ts-node src/index.ts",
-    "test": "jest",
-    "test:watch": "jest --watch"
+    "start": "ts-node src/index.ts"
   },
   "dependencies": {
-    "node-sql-parser": "^5.3.8"
+    "antlr4-c3": "^3.4.4",
+    "dt-sql-parser": "^3.0.5"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.14",
     "@types/node": "^22.13.14",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.3.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.2"
   }
