@@ -13,9 +13,8 @@ export interface SQLConfig {
 
 export interface CompletionItem {
     label: string;
-    kind: 'keyword' | 'function' | 'table' | 'column' | 'operator';
+    kind: string;
     detail?: string;
-    documentation?: string;
 }
 
 export interface CompletionContext {
@@ -32,7 +31,7 @@ export interface CompletionResult {
 
 export interface FlinkSQLContext {
     tables: string[];
-    columns: Record<string, string[]>;
+    columns: { [key: string]: string[] };
     functions: string[];
 }
 
@@ -46,12 +45,12 @@ export const sqlConfig: SQLConfig = {
 
 // 测试数据配置，提供测试用的表、列和函数数据
 export const testContext: FlinkSQLContext = {
-    tables: ['users', 'orders', ...],
+    tables: ['users', 'orders'],
     columns: {
-        'users': ['id', 'name', ...],
-        'orders': ['id', 'user_id', ...]
+        'users': ['id', 'name'],
+        'orders': ['id', 'user_id']
     },
-    functions: ['COUNT', 'SUM', ...]
+    functions: ['COUNT', 'SUM']
 };
 
 // FlinkSQL 补全服务的核心实现
@@ -62,7 +61,10 @@ export class FlinkSQLCompletionService {
 }
 
 // 补全功能的测试用例
-describe('FlinkSQL Completion Tests', () => {
-    // 测试各种场景下的补全功能
-    // 包括：空 SQL、SELECT、FROM、WHERE 等语句的补全
-}); 
+export const completionTests = {
+    name: 'FlinkSQL Completion Tests',
+    tests: () => {
+        // 测试各种场景下的补全功能
+        // 包括：空 SQL、SELECT、FROM、WHERE 等语句的补全
+    }
+};
