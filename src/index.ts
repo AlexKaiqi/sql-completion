@@ -1,7 +1,6 @@
-import pkg from 'dt-sql-parser';
-const { MySQL, EntityContextType, StmtContextType } = pkg;
-import { CaretPosition, Suggestions } from 'dt-sql-parser/src/parser/common/types';
-import { WordRange } from 'dt-sql-parser/src/parser/common/textAndWord';
+import { MySQL, EntityContextType, StmtContextType } from 'dt-sql-parser';
+import { CaretPosition, Suggestions } from 'dt-sql-parser/dist/parser/common/types';
+import { WordRange } from 'dt-sql-parser/dist/parser/common/textAndWord';
 import { MetadataManager } from './metadata';
 
 // 初始化元数据管理器

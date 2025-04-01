@@ -23,7 +23,7 @@
   "homepage": "https://github.com/AlexKaiqi/sql-completion#readme",
   "dependencies": {
     "@types/node": "^18.15.11",
-    "dt-sql-parser": "file:dt-sql-parser",
+    "dt-sql-parser": "^4.1.1",
     "typescript": "^5.0.4"
   },
   "devDependencies": {
