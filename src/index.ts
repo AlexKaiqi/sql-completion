@@ -13,6 +13,7 @@ const scopeAnalyzer = new ScopeAnalyzer(parser, metadataManager);
 
 // 扩展 Suggestions 类型
 interface ExtendedSuggestions extends Suggestions {
+    functions: string[]; // 添加函数建议字段
     cursorPosition?: number; // 添加光标位置字段
 }
 
@@ -28,12 +29,31 @@ function getSuggestions(parser: MySQL, sql: string, position: CaretPosition): Ex
     const filteredKeywords = rawSuggestions.keywords
         .filter(keyword => keyword.toUpperCase().startsWith(lastWord.toUpperCase()))
         .map(keyword => keyword.substring(lastWord.length)); // 去掉与光标前内容重复的部分
+
+    // 获取函数建议
+    const functionSuggestions = getFunctionSuggestions(lastWord);
     
     return {
         syntax: rawSuggestions.syntax,
         keywords: filteredKeywords,
+        functions: functionSuggestions,
         cursorPosition: position.column
     };
+}
+
+// 辅助函数：获取函数补全建议
+function getFunctionSuggestions(prefix: string): string[] {
+    const allFunctions = [
+        ...SQL_FUNCTIONS.aggregate,
+        ...SQL_FUNCTIONS.window
+    ];
+    
+    return allFunctions
+        .filter(func => func.toUpperCase().startsWith(prefix.toUpperCase()))
+        .map(func => {
+            const remaining = func.substring(prefix.length);
+            return remaining + '()'; // 添加括号
+        });
 }
 
 // 辅助函数：从SQL语句中获取光标位置
@@ -203,6 +223,19 @@ function runTests() {
     console.log('测试通过:', emptyPassed);
     console.log('\n');
 
+    // 测试场景 1.9: 函数补全
+    const functionSql = 'SELECT COU｜';
+    const functionPosition = getCaretPosition(functionSql);
+    console.log('测试场景 1.9: 函数补全');
+    console.log('SQL语句:', functionSql);
+    console.log('光标位置:', `行: ${functionPosition.lineNumber}, 列: ${functionPosition.column}`);
+    const functionSuggestions = getSuggestions(parser, functionSql, functionPosition);
+    console.log('函数补全建议:', functionSuggestions.functions);
+    console.log('返回的光标位置:', functionSuggestions.cursorPosition);
+    const functionPassed = functionSuggestions.functions.includes('NT()');
+    console.log('测试通过:', functionPassed);
+    console.log('\n');
+
     // 测试用例 1 总结
     console.log('测试用例 1 总结:');
     console.log('----------------------------------------');
@@ -214,6 +247,7 @@ function runTests() {
     console.log(`场景 1.6: ${havingPassed ? '通过' : '失败'}`);
     console.log(`场景 1.7: ${joinPassed ? '通过' : '失败'}`);
     console.log(`场景 1.8: ${emptyPassed ? '通过' : '失败'}`);
+    console.log(`场景 1.9: ${functionPassed ? '通过' : '失败'}`);
     console.log('\n');
 
     console.log('测试完成！');
