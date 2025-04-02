@@ -1,19 +1,54 @@
-import { MySQL, CaretPosition } from 'dt-sql-parser';
-import { MetadataManager, TableInfo, DatabaseInfo } from './metadata';
+import { MySQL, CaretPosition, MySqlParserListener, MySqlParserVisitor, Suggestions, WordRange } from 'dt-sql-parser';
+import type { CreateViewContext, ColumnNamesContext, SelectElementsContext } from 'dt-sql-parser/dist/lib/mysql/MySqlParser';
+import type { ParserRuleContext, TerminalNode, ErrorNode } from 'antlr4ng';
+import { MetadataManager, TableInfo, DatabaseInfo, ColumnInfo } from './metadata';
+import { EntityContextType, EntityContext, FuncEntityContext, ColumnEntityContext } from 'dt-sql-parser';
 
 // 作用域相关类型定义
 export interface ScopeContext {
+    // 数据库相关
     databases: Map<string, DatabaseInfo>;
-    tables: Map<string, TableInfo>;
-    aliases: Map<string, string>;
-    derivedTables: Map<string, TableInfo>;
-    currentClause: string;
+    catalogs: Map<string, any>;
     currentDatabase?: string;
+    currentCatalog?: string;
+
+    // 表相关
+    tables: Map<string, TableInfo>;
+    tableAliases: Map<string, string>;
+    derivedTables: Map<string, TableInfo>;
+    currentTable?: string;
+
+    // 视图相关
+    views: Map<string, TableInfo>;
+    viewAliases: Map<string, string>;
+
+    // 列相关
+    columns: Map<string, ColumnEntityContext>;
+    columnAliases: Map<string, string>;
+    selectColumnAliases: Map<string, string>;
+    accessibleColumns?: string[];
+
+    // 函数相关
+    functions: Map<string, FuncEntityContext>;
+    currentFunction?: string;
+
+    // 存储过程相关
+    procedures: Map<string, any>;
+    currentProcedure?: string;
+
+    // 别名相关
+    aliases: Map<string, string>;
+
+    // SQL 上下文
+    currentClause?: string;  // SELECT, FROM, WHERE, GROUP BY, HAVING, ORDER BY
+    currentStatement?: string;  // 当前语句类型
+    isInSubquery?: boolean;  // 是否在子查询中
+    parentContext?: ScopeContext;  // 父级上下文（用于子查询）
 }
 
 export interface CompletionItem {
     text: string;
-    type: 'keyword' | 'table' | 'column' | 'function' | 'alias';
+    type: 'keyword' | 'table' | 'column' | 'function' | 'alias' | 'database' | 'view' | 'operator';
     priority: number;
     scope: string;
 }
@@ -38,249 +73,250 @@ export const SQL_OPERATORS = {
     logical: ['AND', 'OR', 'NOT', 'XOR']
 };
 
+// 元数据上下文接口
+export interface MetadataContext {
+    databases: Map<string, DatabaseInfo>;
+    tables: Map<string, TableInfo>;
+    views: Map<string, TableInfo>;
+    tableAliases: Map<string, string>;
+    columnAliases: Map<string, string>;
+    currentDatabase?: string;
+    currentClause?: string;
+    currentTable?: string;
+    accessibleColumns?: string[];
+}
+
+// 定义实体类型
+interface Entity {
+    entityContextType: string;  // 实体类型 (表、视图等)
+    text: string;              // 实体名称
+    _alias?: {                // 别名信息
+        text: string;
+        startIndex: number;
+        endIndex: number;
+        startColumn: number;
+        endColumn: number;
+        line: number;
+    };
+    position: {               // 位置信息
+        startIndex: number;
+        endIndex: number;
+        startColumn: number;
+        endColumn: number;
+        line: number;
+    };
+    belongStmt?: {           // 所属语句信息
+        stmtContextType: string;
+        position: any;
+        rootStmt: any;
+        parentStmt: any;
+        isContainCaret?: boolean;
+    };
+    _comment?: any;
+    relatedEntities?: any;
+}
+
 // 作用域分析核心类
 export class ScopeAnalyzer {
     private parser: MySQL;
     private metadataManager: MetadataManager;
+    private collector: MetadataCollector;
 
     constructor(parser: MySQL, metadataManager: MetadataManager) {
         this.parser = parser;
         this.metadataManager = metadataManager;
+        this.collector = new MetadataCollector(parser);
     }
 
-    // 获取当前位置的上下文
-    public getContextAtPosition(sql: string, position: CaretPosition): {
-        currentClause: string;
-        accessibleTables: string[];
-        accessibleColumns: string[];
-        currentTable?: string;
-        currentDatabase?: string;
-    } {
-        const ast = this.parser.parse(sql);
-        const nodeAtPosition = this.findNodeAtPosition(ast, position);
-
-        return {
-            currentClause: this.determineCurrentClause(nodeAtPosition),
-            accessibleTables: this.getAccessibleTables(nodeAtPosition),
-            accessibleColumns: this.getAccessibleColumns(nodeAtPosition),
-            currentTable: this.getCurrentTable(nodeAtPosition),
-            currentDatabase: this.getCurrentDatabase(nodeAtPosition)
-        };
-    }
-
-    // 分析完整作用域
-    public analyzeScope(sql: string, position: CaretPosition): ScopeContext {
+    analyzeScope(sql: string, position: CaretPosition): ScopeContext {
         const context: ScopeContext = {
             databases: new Map(),
+            catalogs: new Map(),
             tables: new Map(),
+            views: new Map(),
+            tableAliases: new Map(),
+            viewAliases: new Map(),
+            columnAliases: new Map(),
+            selectColumnAliases: new Map(),
             aliases: new Map(),
             derivedTables: new Map(),
-            currentClause: '',
-            currentDatabase: ''
+            columns: new Map(),
+            functions: new Map(),
+            procedures: new Map()
         };
-        
-        const ast = this.parser.parse(sql);
-        const nodeAtPosition = this.findNodeAtPosition(ast, position);
-        
-        // 分析当前子句
-        context.currentClause = this.determineCurrentClause(nodeAtPosition);
-        
-        // 分析可访问的表
-        const tables = this.getAccessibleTables(nodeAtPosition);
-        tables.forEach(table => {
-            const tableInfo = this.metadataManager.getTable(table);
+
+        this.metadataManager.getAllDatabaseNames().forEach(dbName => {
+            const dbInfo = this.metadataManager.getTablesByDatabase(dbName);
+            context.databases.set(dbName, {
+                name: dbName,
+                tables: new Map()
+            });
+        });
+
+        // 设置表信息
+        this.metadataManager.getAllTableNames().forEach(tableName => {
+            const tableInfo = this.metadataManager.getTable(tableName);
             if (tableInfo) {
-                context.tables.set(table, tableInfo);
+                context.tables.set(tableName, tableInfo);
             }
         });
-        
-        // 分析表别名
-        this.analyzeTableAliases(nodeAtPosition, context);
-        
-        // 分析派生表
-        this.analyzeDerivedTables(nodeAtPosition, context);
-        
-        // 分析当前数据库
-        context.currentDatabase = this.getCurrentDatabase(nodeAtPosition);
-        
+
+        // 设置视图信息
+        this.metadataManager.getAllViews().forEach(view => {
+            const viewInfo: TableInfo = {
+                name: view.name,
+                database: view.database,
+                columns: view.columns
+            };
+            context.views.set(view.name, viewInfo);
+            // 将视图添加到对应的数据库中
+            const dbName = view.database || 'test_db';
+            const dbInfo = context.databases.get(dbName);
+            if (dbInfo) {
+                dbInfo.tables.set(view.name, viewInfo);
+            }
+        });
+
+        // 设置表别名
+        this.collector.collect(sql).forEach(entity => {
+            const entityType = entity.entityContextType;
+            const entityName = entity.text;
+            const entityAlias = (entity as any)._alias?.text;
+
+            switch (entityType) {
+                case EntityContextType.TABLE:
+                case EntityContextType.TABLE_CREATE:
+                    if (entityAlias) {
+                        context.tableAliases.set(entityAlias, entityName);
+                    }
+                    break;
+
+                case EntityContextType.VIEW:
+                case EntityContextType.VIEW_CREATE:
+                    if (entityAlias) {
+                        context.viewAliases.set(entityAlias, entityName);
+                    }
+                    break;
+
+                case EntityContextType.COLUMN:
+                case EntityContextType.COLUMN_CREATE:
+                    if (entityAlias) {
+                        if (this.isSelectColumnAlias(entity)) {
+                            context.selectColumnAliases.set(entityAlias, entityName);
+                        } else {
+                            context.columnAliases.set(entityAlias, entityName);
+                        }
+                    }
+                    break;
+            }
+        });
+
         return context;
     }
 
-    // 获取补全建议优先级
-    public getCompletionPriority(item: CompletionItem): number {
-        const basePriorities = {
-            'keyword': 1000,
-            'table': 900,
-            'column': 800,
-            'function': 700,
-            'alias': 600
+    // 获取当前位置的上下文
+    getContextAtPosition(sql: string, position: CaretPosition): ScopeContext {
+        // 收集当前 SQL 中的实体
+        const entities = this.collector.collect(sql);
+        
+        // 初始化上下文
+        const context: ScopeContext = {
+            databases: new Map(),
+            catalogs: new Map(),
+            tables: new Map(),
+            views: new Map(),
+            tableAliases: new Map(),
+            viewAliases: new Map(),
+            columnAliases: new Map(),
+            selectColumnAliases: new Map(),
+            aliases: new Map(),
+            derivedTables: new Map(),
+            columns: new Map(),
+            functions: new Map(),
+            procedures: new Map()
         };
-        
-        let priority = basePriorities[item.type];
-        
-        // 根据作用域调整优先级
-        if (item.scope === 'current') {
-            priority += 500;
-        }
-        
-        return priority;
-    }
 
-    // 获取上下文感知的补全建议
-    public getContextAwareCompletions(context: ScopeContext): CompletionItem[] {
-        const completions: CompletionItem[] = [];
-        
-        switch (context.currentClause) {
-            case 'SELECT':
-                this.addSelectCompletions(context, completions);
-                break;
-            case 'FROM':
-                this.addFromCompletions(context, completions);
-                break;
-            case 'WHERE':
-                this.addWhereCompletions(context, completions);
-                break;
-            case 'GROUP BY':
-                this.addGroupByCompletions(context, completions);
-                break;
-            case 'HAVING':
-                this.addHavingCompletions(context, completions);
-                break;
-        }
-        
-        return completions.sort((a, b) => b.priority - a.priority);
-    }
-
-    // 私有辅助方法
-    private determineCurrentClause(node: any): string {
-        if (!node) return '';
-
-        let current = node;
-        while (current && current.parent) {
-            if (current.type === 'SELECT') return 'SELECT';
-            if (current.type === 'FROM') return 'FROM';
-            if (current.type === 'WHERE') return 'WHERE';
-            if (current.type === 'GROUP BY') return 'GROUP BY';
-            if (current.type === 'HAVING') return 'HAVING';
-            if (current.type === 'ORDER BY') return 'ORDER BY';
-            if (current.type === 'JOIN') return 'JOIN';
-            if (current.type === 'ON') return 'ON';
-            current = current.parent;
-        }
-        return '';
-    }
-
-    private getAccessibleTables(node: any): string[] {
-        const tables: string[] = [];
-        
-        let current = node;
-        while (current && current.parent) {
-            if (current.type === 'FROM') {
-                tables.push(...this.extractTablesFromFromClause(current));
-            }
-            if (current.type === 'JOIN') {
-                tables.push(...this.extractTablesFromJoinClause(current));
-            }
-            current = current.parent;
-        }
-        
-        return [...new Set(tables)];
-    }
-
-    private getAccessibleColumns(node: any): string[] {
-        const columns: string[] = [];
-        const tables = this.getAccessibleTables(node);
-        
-        tables.forEach(table => {
-            const tableInfo = this.metadataManager.getTable(table);
-            if (tableInfo) {
-                columns.push(...tableInfo.columns.map(col => col.name));
+        // 从 MetadataManager 获取所有数据库信息
+        this.metadataManager.getAllDatabaseNames().forEach(dbName => {
+            const dbInfo = this.metadataManager.getDatabase(dbName);
+            if (dbInfo) {
+                context.databases.set(dbName, dbInfo);
             }
         });
-        
-        return columns;
-    }
 
-    private findNodeAtPosition(ast: any, position: CaretPosition): any {
-        // TODO: 实现AST节点查找
-        return null;
-    }
-
-    private extractTablesFromFromClause(node: any): string[] {
-        const tables: string[] = [];
-        if (node.type === 'FROM') {
-            node.children?.forEach((child: any) => {
-                if (child.type === 'TABLE_REFERENCE') {
-                    tables.push(child.name);
-                }
-            });
-        }
-        return tables;
-    }
-
-    private extractTablesFromJoinClause(node: any): string[] {
-        const tables: string[] = [];
-        if (node.type === 'JOIN') {
-            node.children?.forEach((child: any) => {
-                if (child.type === 'TABLE_REFERENCE') {
-                    tables.push(child.name);
-                }
-            });
-        }
-        return tables;
-    }
-
-    private getCurrentTable(node: any): string | undefined {
-        if (!node) return undefined;
-        
-        let current = node;
-        while (current && current.parent) {
-            if (current.type === 'TABLE_REFERENCE') {
-                return current.name;
+        // 从 MetadataManager 获取所有表信息
+        this.metadataManager.getAllTableNames().forEach(tableName => {
+            const tableInfo = this.metadataManager.getTable(tableName);
+            if (tableInfo) {
+                context.tables.set(tableName, tableInfo);
             }
-            current = current.parent;
-        }
-        return undefined;
-    }
+        });
 
-    private getCurrentDatabase(node: any): string | undefined {
-        if (!node) return undefined;
-        
-        let current = node;
-        while (current && current.parent) {
-            if (current.type === 'DATABASE_REFERENCE') {
-                return current.name;
+        // 从 MetadataManager 获取所有视图信息
+        this.metadataManager.getAllViews().forEach(view => {
+            const viewInfo: TableInfo = {
+                name: view.name,
+                database: view.database,
+                columns: view.columns
+            };
+            context.views.set(view.name, viewInfo);
+        });
+
+        // 处理当前 SQL 中的别名信息
+        entities.forEach(entity => {
+            const entityType = entity.entityContextType;
+            const entityName = entity.text;
+            const entityAlias = (entity as any)._alias?.text;
+
+            switch (entityType) {
+                case EntityContextType.TABLE:
+                case EntityContextType.TABLE_CREATE:
+                    if (entityAlias) {
+                        context.tableAliases.set(entityAlias, entityName);
+                    }
+                    break;
+
+                case EntityContextType.VIEW:
+                case EntityContextType.VIEW_CREATE:
+                    if (entityAlias) {
+                        context.viewAliases.set(entityAlias, entityName);
+                    }
+                    break;
+
+                case EntityContextType.COLUMN:
+                case EntityContextType.COLUMN_CREATE:
+                    if (entityAlias) {
+                        if (this.isSelectColumnAlias(entity)) {
+                            context.selectColumnAliases.set(entityAlias, entityName);
+                        } else {
+                            context.columnAliases.set(entityAlias, entityName);
+                        }
+                    }
+                    break;
             }
-            current = current.parent;
-        }
-        return undefined;
+        });
+
+        return context;
     }
 
-    private analyzeTableAliases(node: any, context: ScopeContext): void {
-        // TODO: 实现表别名分析
+    // 判断是否是 SELECT 语句中的列别名
+    private isSelectColumnAlias(entity: EntityContext): boolean {
+        const position = entity.position;
+        return position.line === 1 && position.startColumn > 7;
+    }
+}
+
+class MetadataCollector {
+    private parser: MySQL;
+
+    constructor(parser: MySQL) {
+        this.parser = parser;
     }
 
-    private analyzeDerivedTables(node: any, context: ScopeContext): void {
-        // TODO: 实现派生表分析
-    }
-
-    private addSelectCompletions(context: ScopeContext, completions: CompletionItem[]): void {
-        // TODO: 实现SELECT子句补全
-    }
-
-    private addFromCompletions(context: ScopeContext, completions: CompletionItem[]): void {
-        // TODO: 实现FROM子句补全
-    }
-
-    private addWhereCompletions(context: ScopeContext, completions: CompletionItem[]): void {
-        // TODO: 实现WHERE子句补全
-    }
-
-    private addGroupByCompletions(context: ScopeContext, completions: CompletionItem[]): void {
-        // TODO: 实现GROUP BY子句补全
-    }
-
-    private addHavingCompletions(context: ScopeContext, completions: CompletionItem[]): void {
-        // TODO: 实现HAVING子句补全
+    collect(sql: string): EntityContext[] {
+        // 获取所有实体
+        const entities = this.parser.getAllEntities(sql) as unknown as EntityContext[];
+        console.log('entities', entities);
+        return entities || [];
     }
 } 

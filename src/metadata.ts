@@ -26,6 +26,7 @@ interface View {
     name: string;
     database: string;
     columns: ColumnInfo[];
+    isView: boolean;
 }
 
 export class MetadataManager {
@@ -88,5 +89,10 @@ export class MetadataManager {
 
     getAllViews(): View[] {
         return Array.from(this.views.values());
+    }
+
+    // 获取数据库信息
+    getDatabase(databaseName: string): DatabaseInfo | undefined {
+        return this.databases.get(databaseName);
     }
 } 
