@@ -8,9 +8,13 @@
   - SELECT 语句中的列名补全
   - FROM 子句中的表名补全
   - WHERE 子句中的条件补全
+  - JOIN 子句中的表名和列名补全
+  - GROUP BY 和 ORDER BY 子句中的列名补全
 - 支持表结构元数据管理
 - 支持 MySQL 语法解析
 - 提供精确的光标位置分析
+- 支持数据库、表、视图的元数据管理
+- 支持表别名和列别名的智能补全
 
 ## 安装
 
@@ -25,10 +29,13 @@ npm install dt-sql-parser
 ```typescript
 import { MySQL, EntityContextType, StmtContextType, CaretPosition, Suggestions } from 'dt-sql-parser';
 import { MetadataManager } from './metadata';
+import { ScopeAnalyzer } from './scope';
+import { getSuggestions } from './suggestions';
 
 // 初始化解析器和元数据管理器
 const parser = new MySQL();
 const metadataManager = new MetadataManager();
+const scopeAnalyzer = new ScopeAnalyzer(parser, metadataManager);
 
 // 注册表结构
 const createTablesSQL = `
@@ -39,12 +46,13 @@ CREATE TABLE users (
     created_at TIMESTAMP
 );
 `;
-registerTableMetadata(createTablesSQL);
+metadataManager.registerTableMetadata(createTablesSQL);
 
 // 获取补全建议
 const sql = 'SELECT * FROM users WHERE id = 1';
 const position = { lineNumber: 1, column: 8 };
-const suggestions = parser.getSuggestionAtCaretPosition(sql, position);
+const context = scopeAnalyzer.getContextAtPosition(sql, position);
+const suggestions = getSuggestions(context);
 ```
 
 ### 补全场景示例
@@ -157,8 +165,34 @@ SELECT user_id, COUNT(*) FROM orders GROUP BY user_id HAVING |  -- 光标位置
 src/
 ├── index.ts           # 主入口文件
 ├── metadata.ts        # 元数据管理
+├── scope.ts          # 作用域分析
+├── suggestions.ts    # 补全建议生成
 └── types/            # 类型定义
+    ├── metadata.ts   # 元数据类型定义
+    └── scope.ts      # 作用域类型定义
 ```
+
+## 核心组件
+
+### MetadataManager
+负责管理所有元数据，包括：
+- 数据库信息
+- 表结构
+- 视图定义
+- 表关系
+
+### MetadataCollector
+负责从 SQL 语句中收集实体信息：
+- 表名
+- 列名
+- 别名
+- 函数调用
+
+### ScopeAnalyzer
+负责分析 SQL 语句的作用域：
+- 构建上下文信息
+- 解析表别名
+- 确定可访问的实体
 
 ## 开发
 
