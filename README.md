@@ -159,6 +159,69 @@ SELECT user_id, COUNT(*) FROM orders GROUP BY user_id HAVING |  -- 光标位置
 ```
 预期：提供聚合函数和条件建议，如 `COUNT(*) > 1`, `SUM(amount) > 100` 等
 
+## 系统架构
+
+```mermaid
+graph TD
+    A[Frontend] -->|LSP请求| B[LSP Server]
+    B -->|上下文请求| C[SQLContext Provider]
+    B -->|补全请求| D[Completion Provider]
+    D -->|元数据请求| E[Metadata Provider]
+    
+    subgraph Frontend Layer
+        A
+    end
+    
+    subgraph LSP Layer
+        B
+    end
+    
+    subgraph Context Layer
+        C
+    end
+    
+    subgraph Completion Layer
+        D
+    end
+    
+    subgraph Metadata Layer
+        E
+    end
+
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style C fill:#bfb,stroke:#333,stroke-width:2px
+    style D fill:#fbb,stroke:#333,stroke-width:2px
+    style E fill:#bff,stroke:#333,stroke-width:2px
+```
+
+### 架构说明
+
+1. **Frontend Layer**
+   - 负责用户界面和交互
+   - 发送LSP请求到服务器
+   - 展示补全建议
+
+2. **LSP Layer**
+   - 实现Language Server Protocol
+   - 处理客户端请求
+   - 管理通信协议
+
+3. **Context Layer**
+   - 收集和分析SQL上下文
+   - 提供位置相关的语义信息
+   - 维护作用域信息
+
+4. **Completion Layer**
+   - 基于上下文生成补全建议
+   - 实现补全规则引擎
+   - 处理补全优先级
+
+5. **Metadata Layer**
+   - 管理数据库元数据
+   - 提供表结构信息
+   - 维护数据库对象关系
+
 ## 项目结构
 
 ```

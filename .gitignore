@@ -1,7 +1,7 @@
 # Dependencies
 node_modules/
 dt-sql-parser/
-temp-dt-sql-parser/
+sqls/
 
 # Build output
 dist/

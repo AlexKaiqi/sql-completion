@@ -1,10 +1,11 @@
-import { MySQL, EntityContextType, CaretPosition } from 'dt-sql-parser';
-import { MetadataManager } from './metadata';
+import { MySQL, SparkSQL, EntityContextType, CaretPosition } from 'dt-sql-parser';
+import { MetadataManager } from './completion/core/metadata-protocol';
+import { DefaultMetadataManager } from './completion/core/metadata-provider';
 import { ScopeAnalyzer } from './scope';
 import { getSuggestions } from './suggestions';
 
 // 初始化元数据管理器
-const metadataManager = new MetadataManager();
+const metadataManager = new DefaultMetadataManager();
 
 // 初始化 SQL 解析器
 const parser = new MySQL();
@@ -434,3 +435,8 @@ export {
     registerTestTableMetadata,
     getSuggestions
 };
+
+// 导出协议定义
+export * from './completion/completion-protocol';
+export * from './hover/hover-hint-protocol';
+export * from './diagnose/diagnostic-protocol';
