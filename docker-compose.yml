@@ -1,40 +1,17 @@
-version: '3'
+version: '3.8'
 
 services:
-  ts-service:
-    build:
-      context: .
-      dockerfile: Dockerfile.ts
+  api:
+    build: .
     ports:
       - "3000:3000"
-    networks:
-      - app-network
     environment:
-      - JAVA_SERVICE_URL=http://java-service:8080
-    depends_on:
-      - java-service
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 10s
-
-  java-service:
-    build:
-      context: ./java-service  # 假设您的Java服务在这个目录
-      dockerfile: Dockerfile.java
-    ports:
-      - "8080:8080"
-    networks:
-      - app-network
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-networks:
-  app-network:
-    driver: bridge 
+      retries: 3 

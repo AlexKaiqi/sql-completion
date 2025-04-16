@@ -1,285 +1,135 @@
-# SQL 智能补全工具
+# SQL 上下文分析服务
 
-这是一个基于 `dt-sql-parser` 的 SQL 智能补全工具，能够根据上下文提供准确的 SQL 补全建议。
+这是一个基于 Express 的 RESTful 服务，用于分析 SQL 语句的上下文信息，支持多种 SQL 方言。
 
 ## 功能特性
 
-- 基于上下文的智能补全
-  - SELECT 语句中的列名补全
-  - FROM 子句中的表名补全
-  - WHERE 子句中的条件补全
-  - JOIN 子句中的表名和列名补全
-  - GROUP BY 和 ORDER BY 子句中的列名补全
-- 支持表结构元数据管理
-- 支持 MySQL 语法解析
-- 提供精确的光标位置分析
-- 支持数据库、表、视图的元数据管理
-- 支持表别名和列别名的智能补全
+- 支持多种 SQL 方言
+  - MySQL
+  - PostgreSQL
+  - Hive
+  - Spark SQL
+  - Trino
+- 提供 SQL 上下文分析
+  - 光标位置语法分析
+  - 子句类型识别
+  - 位置类型判断
+- 请求追踪
+  - 唯一请求 ID
+  - 完整日志记录
+- RESTful API 接口
+- 健康检查接口
 
 ## 安装
 
 ```bash
-npm install dt-sql-parser
+# 安装依赖
+npm install
+
+# 运行测试
+npm test
+
+# 启动服务
+npm start
 ```
 
-## 使用方法
+## API 接口
 
-### 基本使用
+### 1. 获取 SQL 上下文
 
-```typescript
-import { MySQL, EntityContextType, StmtContextType, CaretPosition, Suggestions } from 'dt-sql-parser';
-import { MetadataManager } from './metadata';
-import { ScopeAnalyzer } from './scope';
-import { getSuggestions } from './suggestions';
+#### 上下文 API 请求
 
-// 初始化解析器和元数据管理器
-const parser = new MySQL();
-const metadataManager = new MetadataManager();
-const scopeAnalyzer = new ScopeAnalyzer(parser, metadataManager);
+```http
+POST /api/context
+Content-Type: application/json
+X-Request-ID: <可选的请求ID>
 
-// 注册表结构
-const createTablesSQL = `
-CREATE TABLE users (
-    id INT,
-    name VARCHAR(255),
-    email VARCHAR(255),
-    created_at TIMESTAMP
-);
-`;
-metadataManager.registerTableMetadata(createTablesSQL);
-
-// 获取补全建议
-const sql = 'SELECT * FROM users WHERE id = 1';
-const position = { lineNumber: 1, column: 8 };
-const context = scopeAnalyzer.getContextAtPosition(sql, position);
-const suggestions = getSuggestions(context);
+{
+  "sql": "SELECT * FROM users WHERE id = 1",
+  "position": {
+    "lineNumber": 1,
+    "column": 8
+  },
+  "language": "mysql"  // 可选值: mysql, postgresql, hive, spark, trino
+}
 ```
 
-### 补全场景示例
+#### 上下文 API 响应
 
-1. SELECT 语句补全
-```sql
-SELECT |  -- 光标位置
-```
-将提供所有可用的列名建议。
-
-2. 带表名的列名补全
-```sql
-SELECT users.|  -- 光标位置
-```
-预期：提供 users 表的列名建议，如 `users.id`, `users.name`, `users.email` 等
-
-3. 多表查询的列名补全
-```sql
-SELECT u.| FROM users u  -- 光标位置
-```
-预期：提供 users 表的列名建议，并带有表别名 `u.id`, `u.name`, `u.email` 等
-
-#### 2. FROM 子句补全
-
-1. 基础表名补全
-```sql
-SELECT * FROM |  -- 光标位置
-```
-预期：提供所有可用的表名建议，如 `users`, `orders` 等
-
-2. 带数据库名的表名补全
-```sql
-SELECT * FROM mydb.|  -- 光标位置
-```
-预期：提供 mydb 数据库中的表名建议
-
-3. 表别名补全
-```sql
-SELECT * FROM users |  -- 光标位置
-```
-预期：提供表别名建议，如 `AS u`, `u` 等
-
-#### 3. WHERE 子句补全
-
-1. 条件运算符补全
-```sql
-SELECT * FROM users WHERE id |  -- 光标位置
-```
-预期：提供运算符建议，如 `=`, `>`, `<`, `>=`, `<=`, `!=` 等
-
-2. 逻辑运算符补全
-```sql
-SELECT * FROM users WHERE id = 1 |  -- 光标位置
-```
-预期：提供逻辑运算符建议，如 `AND`, `OR`, `NOT` 等
-
-3. 函数补全
-```sql
-SELECT * FROM users WHERE |  -- 光标位置
-```
-预期：提供常用函数建议，如 `COUNT()`, `SUM()`, `AVG()`, `MAX()`, `MIN()` 等
-
-#### 4. JOIN 子句补全
-
-1. JOIN 类型补全
-```sql
-SELECT * FROM users |  -- 光标位置
-```
-预期：提供 JOIN 类型建议，如 `INNER JOIN`, `LEFT JOIN`, `RIGHT JOIN`, `FULL JOIN` 等
-
-2. JOIN 条件补全
-```sql
-SELECT * FROM users u INNER JOIN orders o ON |  -- 光标位置
-```
-预期：提供关联条件建议，如 `u.id = o.user_id` 等
-
-#### 5. GROUP BY 子句补全
-
-1. 分组列补全
-```sql
-SELECT * FROM orders GROUP BY |  -- 光标位置
-```
-预期：提供可用的列名建议，如 `status`, `user_id` 等
-
-#### 6. ORDER BY 子句补全
-
-1. 排序列补全
-```sql
-SELECT * FROM users ORDER BY |  -- 光标位置
-```
-预期：提供可用的列名建议，如 `id`, `name`, `created_at` 等
-
-2. 排序方向补全
-```sql
-SELECT * FROM users ORDER BY id |  -- 光标位置
-```
-预期：提供排序方向建议，如 `ASC`, `DESC` 等
-
-#### 7. HAVING 子句补全
-
-1. 聚合条件补全
-```sql
-SELECT user_id, COUNT(*) FROM orders GROUP BY user_id HAVING |  -- 光标位置
-```
-预期：提供聚合函数和条件建议，如 `COUNT(*) > 1`, `SUM(amount) > 100` 等
-
-## 系统架构
-
-```mermaid
-graph TD
-    A[Frontend] -->|LSP请求| B[LSP Server]
-    B -->|上下文请求| C[SQLContext Provider]
-    B -->|补全请求| D[Completion Provider]
-    D -->|元数据请求| E[Metadata Provider]
-    
-    subgraph Frontend Layer
-        A
-    end
-    
-    subgraph LSP Layer
-        B
-    end
-    
-    subgraph Context Layer
-        C
-    end
-    
-    subgraph Completion Layer
-        D
-    end
-    
-    subgraph Metadata Layer
-        E
-    end
-
-    style A fill:#f9f,stroke:#333,stroke-width:2px
-    style B fill:#bbf,stroke:#333,stroke-width:2px
-    style C fill:#bfb,stroke:#333,stroke-width:2px
-    style D fill:#fbb,stroke:#333,stroke-width:2px
-    style E fill:#bff,stroke:#333,stroke-width:2px
+```json
+{
+  "context": {
+    "syntax": {
+      "clauseType": "string",
+      "positionType": "string"
+    }
+    // 其他上下文信息
+  }
+}
 ```
 
-### 架构说明
+### 2. 健康检查
 
-1. **Frontend Layer**
-   - 负责用户界面和交互
-   - 发送LSP请求到服务器
-   - 展示补全建议
+#### 健康检查 API 请求
 
-2. **LSP Layer**
-   - 实现Language Server Protocol
-   - 处理客户端请求
-   - 管理通信协议
-
-3. **Context Layer**
-   - 收集和分析SQL上下文
-   - 提供位置相关的语义信息
-   - 维护作用域信息
-
-4. **Completion Layer**
-   - 基于上下文生成补全建议
-   - 实现补全规则引擎
-   - 处理补全优先级
-
-5. **Metadata Layer**
-   - 管理数据库元数据
-   - 提供表结构信息
-   - 维护数据库对象关系
-
-## 项目结构
-
-```
-src/
-├── index.ts           # 主入口文件
-├── metadata.ts        # 元数据管理
-├── scope.ts          # 作用域分析
-├── suggestions.ts    # 补全建议生成
-└── types/            # 类型定义
-    ├── metadata.ts   # 元数据类型定义
-    └── scope.ts      # 作用域类型定义
+```http
+GET /api/health
+X-Request-ID: <可选的请求ID>
 ```
 
-## 核心组件
+#### 健康检查 API 响应
 
-### MetadataManager
-负责管理所有元数据，包括：
-- 数据库信息
-- 表结构
-- 视图定义
-- 表关系
+```json
+{
+  "status": "ok"
+}
+```
 
-### MetadataCollector
-负责从 SQL 语句中收集实体信息：
-- 表名
-- 列名
-- 别名
-- 函数调用
+## 错误处理
 
-### ScopeAnalyzer
-负责分析 SQL 语句的作用域：
-- 构建上下文信息
-- 解析表别名
-- 确定可访问的实体
+服务会返回适当的 HTTP 状态码和错误信息：
+
+- 400: 无效的请求参数
+- 500: 服务器内部错误
+
+错误响应格式：
+
+```json
+{
+  "error": "错误类型",
+  "message": "详细错误信息"
+}
+```
 
 ## 开发
 
-### 环境要求
+### 项目结构
 
-- Node.js >= 14
-- TypeScript >= 4.0
-
-### 安装依赖
-
-```bash
-npm install
+```text
+src/
+├── config/         # 配置文件
+├── controllers/    # 控制器
+├── middleware/     # 中间件
+├── routes/        # 路由定义
+├── services/      # 业务逻辑
+├── types/         # 类型定义
+├── utils/         # 工具函数
+└── server.ts      # 服务入口
 ```
 
-### 构建
+### 日志系统
 
-```bash
-npm run build
-```
+服务使用结构化日志记录，包含以下级别：
 
-## 贡献
+- DEBUG: 调试信息
+- INFO: 常规信息
+- WARN: 警告信息
+- ERROR: 错误信息
 
-欢迎提交 Issue 和 Pull Request！
+每条日志都包含：
 
-## 许可证
-
-MIT 
+- 时间戳
+- 日志级别
+- 请求 ID（如果有）
+- 消息内容
+- 元数据（如果有）
